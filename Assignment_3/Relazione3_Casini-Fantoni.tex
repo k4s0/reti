@@ -1,0 +1,5446 @@
+\documentclass[a4paperr]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{graphicx}
+\usepackage{listings}
+
+\begin{document}
+
+\author{Lorenzo Casini \and Sophia Fantoni}
+\title{PROGRAMMAZIONE DI RETI \\ REPORT ASSIGNMENT 3}
+\maketitle
+
+\newpage
+
+\tableofcontents	%crea l'indice
+
+\newpage
+
+\section{Premessa}
+Nel terzo assignment viene richiesto di implementare, a livello di trasporto, le funzioni lato receiver (A) e lato sender (B) utilizzando la tecnica Go-back-n. Con questo principio di trasferimento dati applichiamo la risoluzione dei problemi in pipeline. In questo caso sarà quindi necessario inserire le finestre per verificare il corretto invio e la corretta recezione dei pacchetti, anche se non ordinata. 
+\par Il GBN è un protocollo a sequenza scorrevole basato su ACK e privo di NACK. Il mittente può trasmettere al più n pacchetti senza ricevere gli ACK. 
+\par Ogni pacchetto ha un numero di sequenza, grazie a questo è possibile riconoscere i pacchetti che possono essere inviati e ricevuti. Un pacchetto sarà quindi inviato, o ricevuto, se e solo se il suo numero di sequenza è contenuto nella finestra di invio, o di recezione. Il numero di sequenza può essere pari, al massimo, a due volte la dimensione delle finestre.  
+
+\section{Task 1}
+
+\subsection{Strutture Dati Utilizzate}
+Per la corretta implementazione del protocollo descritto abbiamo utilizzato due distinte strutture dati, una per il sender e una per il receiver, contenenti una finestra per memorizzare i messaggi inviati e ricevuti, e tutte le variabili necessarie per verificare l'intergrità e le varie statistiche sui pacchetti. Per portare a termine l'assignement abbiamo implementato diverse funzioni utili e spesso utilizzate all'interno del codice.
+
+\begin{itemize}
+\item calcChecksum$\rightarrow$ calcola il checksum del pacchetto
+\item isCorrupt$\rightarrow$ controlla se un pacchetto è corrotto
+\item isWithinWindow$\rightarrow$ controlla se un pacchetto è all'interno della finestra specificata
+\item checkCorrectAck$\rightarrow$  calcola il numero di acknowledge corretto da inviare
+\item sendToLayer5$\rightarrow$ invia il pacchetto in ordine corretto al Layer5
+\end{itemize}
+
+\newpage
+
+\subsection{Descrizione delle routine}
+\begin{flushleft}
+\textbf{A\_output()}
+\end{flushleft}
+La prima operazione che svolge questa routine è la memorizzazione del messaggio passatogli dal Layer5 nel buffer dei messaggi da inviare. \\ Una volta memorizzato il messaggio, si controlla se il prossimo SEQ\_NUM è all'interno della finestra di invio, se ciò si verifica si procede con la creazione del pacchetto (seq\_num, payload, checksum). \\ Al termine della creazione vengono richiamate in successione tolayer3() e starttimer(), che rispettivamente inviano il pacchetto al receiver (B) e fanno partire il timer del sender (A). \\ Tenendo conto delle specifiche date se la nostra versione del protocolla raggiunge un buffer di 50 elementi l'intero processo termina.
+
+\begin{flushleft}
+\textbf{A\_input()}
+\end{flushleft}
+Questa funzione viene richiamata quando un messaggio proveniente del receiver passa attraverso il layer3. Inizialmente la funzione controlla se il pacchetto in arrivo è corrotto, se non lo è procede, verificando se appartiene alla finestra dei pacchetti inviati precedentemente, in tal caso accetta l’ACK inviato da (B), altrimenti procede a scartarlo. Successivamente viene eseguito un ulteriore controllo: nel caso in cui il numero dell'ACK sia superiore al SEQ\_NUM dei pacchetti inviati, si procede a shiftare la finestra. In questo caso, infatti, si riceve un ACK cumulativo per il quale tutti i pacchetti sono stati recapitati con successo. Infine si controlla la presenza di nuovi pacchetti da inviare nel msg\_buffer.
+
+\begin{flushleft}
+\textbf{A\_timerinterrupt()}
+\end{flushleft}
+Richiamata nel momento in cui il timer del sender (A) scade. Si procede col rispedire tutti i pacchetti presenti nella finestra di invio che non hanno ricevuto un ACK, successivamente resetta e avvia il timer in attesa dei nuovi ACK da parte del receiver.
+
+\begin{flushleft}
+\textbf{A\_init()}
+\end{flushleft}
+Questa funzione inizializza le strutture e le variabili del sender.
+
+\begin{flushleft}
+\textbf{B\_input()}
+\end{flushleft}
+Questa funzione viene richiamata al momento della recezione di un pacchetto. In primo luogo viene effettuato un controllo tramite checksum, nel caso risulti corrotto si procede con l'invio di un ACK duplicato per segnalare ad A, la presenza di un errore. Se il pacchetto risulta integro si procede controllando il SEQ\_NUM, questa verifica è utile per evitare che, una volta raggiunto il massimo SEQ\_NUM, esso venga resettato prima di aver ricevuto tutti gli ACK dei pacchetti inviati dal sender. \\ Calcolato il corretto ACK da inviare, viene creato il pachetto e spedito al sender. Ad ogni invio di ACK verso il sender, viene richiamata la funzione (send\_toLayer5) che invia al Layer5 solo i messaggi, non ancora inviati. 
+
+\begin{flushleft}
+\textbf{B\_init()}
+\end{flushleft}
+Questa funzione inizializza le strutture e le variabili del receiver.
+ 
+\subsection{Modello a Stati Finiti}
+Rappresentazione del comportamento del sender e del receiver attraverso una macchina a stati finiti.\par
+\includegraphics[width=\linewidth]{SchemaSender.jpg}\par
+\includegraphics[width=\linewidth]{SchemaReceiver.jpg}
+
+\newpage
+
+\subsection{Test netsimulator.c}
+
+\subsubsection{Utilizzo di un timer statico}
+Nel nostro programma è presente un unico timer statico, univoco per tutti i pacchetti da inviare/ricevere. Il nostro programma presenta delle restrizioni, in quanto il protocollo selective repeat necessita di un singolo timer per ogni pacchetto inviato. \\
+Come possiamo notare, la funzione A\_input blocca il timer dopo la recezione di un ACK corretto e lo avvia solo nel caso in cui alcuni pacchetti siano già stati inviati, ma dei quali non abbiamo ancora ricevuto l’ACK. Inoltre, il timer viene avviato dalla funzione A\_output solo nel caso in cui il pacchetto sia posto nella prima posizione della finestra. \\
+Se avessimo avuto a disposizione n timer, uno per ogni pacchetto inviato, avremmo dovuto gestire in modo diverso l’avvio e il blocco del timer.
+
+\subsubsection{Caso 1}
+Probabilità di corruzione o perdita di pacchetti 0
+\begin{lstlisting}[
+    basicstyle=\scriptsize 
+]
+Enter number of messages to simulate: 3  
+Enter packet loss probability [enter 0.0 for no loss]:0.0
+Enter packet corruption probability [0.0 for no corruption]:0.0
+Enter average time between messages from sender's layer5 [ > 0.0]:10
+Enter window size [>0]:10
+Enter retransmission timeout [> 0.0]:20
+Enter trace level:2
+Enter random seed: [>0]:2233
+
+EVENT time: 6.100040,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> aaaaaaaaaaaaaaaaaaa
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+
+EVENT time: 8.261361,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> bbbbbbbbbbbbbbbbbbb
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+
+EVENT time: 10.094729,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+
+EVENT time: 12.437849,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 1
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 1
+
+EVENT time: 14.666768,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+A: Checking ACK from B...
+
+EVENT time: 16.046022,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ccccccccccccccccccc
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+
+EVENT time: 18.409314,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 1
+A: Checking ACK from B...
+
+EVENT time: 19.632557,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 2
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+
+EVENT time: 22.796655,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: Checking ACK from B...
+
+EVENT time: 27.757805,  type: 1, fromlayer5  entity: 0
+Simulator terminated at time 27.757805108798
+ 
+==================================
+==   END SIMULATION STATISTICS  ==
+==================================
+ 
+----------------------------------
+|  Messages arrived to A:  3    |
+|  Packets sent from A:    3    |
+|  Packets retransmitted:   0     |
+|  Correct acks:            3     |
+|  Corrupted packets:       0     |
+----------------------------------
+
+\end{lstlisting}
+
+\newpage
+
+\subsubsection{Caso 2}
+Probabilità di corruzione o perdita di pacchetti 0.2
+\begin{lstlisting}[
+    basicstyle=\tiny
+]
+Enter number of messages to simulate: 50
+Enter packet loss probability [enter 0.0 for no loss]:0.2
+Enter packet corruption probability [0.0 for no corruption]:0.2
+Enter average time between messages from sender's layer5 [ > 0.0]:10
+Enter window size [>0]:8
+Enter retransmission timeout [> 0.0]:20
+Enter trace level:2
+Enter random seed: [>0]:2233
+
+EVENT time: 9.181188,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> aaaaaaaaaaaaaaaaaaa
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being corrupted
+
+EVENT time: 11.710562,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> bbbbbbbbbbbbbbbbbbb
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+
+EVENT time: 14.562120,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> ?aaaaaaaaaaaaaaaaaa
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 17.071139,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 23.490646,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 29.176305,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ccccccccccccccccccc
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+
+EVENT time: 29.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+
+EVENT time: 31.216773,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ddddddddddddddddddd
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+
+EVENT time: 31.881375,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 34.024934,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 38.082522,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 42.254982,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 46.134831,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> eeeeeeeeeeeeeeeeeee
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+
+EVENT time: 46.456221,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 48.403607,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 49.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+
+EVENT time: 50.750572,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 53.943846,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 55.994751,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> fffffffffffffffffff
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+
+EVENT time: 57.067568,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 58.933073,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ggggggggggggggggggg
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being lost
+
+EVENT time: 61.711570,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 64.757897,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+
+EVENT time: 68.695181,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 5
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+          TOLAYER3: packet being corrupted
+
+EVENT time: 69.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+
+EVENT time: 72.116703,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+A: Checking ACK from B...
+
+EVENT time: 72.706900,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 5
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+          TOLAYER3: packet being corrupted
+
+EVENT time: 76.968902,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> hhhhhhhhhhhhhhhhhhh
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+
+EVENT time: 78.435560,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 5
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+
+EVENT time: 78.770104,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> iiiiiiiiiiiiiiiiiii
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being corrupted
+
+EVENT time: 81.622852,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 999999
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 5
+
+EVENT time: 84.193335,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 5
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+
+EVENT time: 84.245857,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 5
+
+EVENT time: 88.722800,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 5
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+          TOLAYER3: packet being lost
+
+EVENT time: 90.503128,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 6
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+
+EVENT time: 91.162450,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> jjjjjjjjjjjjjjjjjjj
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+
+EVENT time: 92.116703,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+
+EVENT time: 93.056001,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+A: Rejecting ACK from B...  Waiting for new ACK 5
+
+EVENT time: 94.589068,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> kkkkkkkkkkkkkkkkkkk
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+
+EVENT time: 95.594562,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 6
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+          TOLAYER3: packet being lost
+
+EVENT time: 97.881924,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 6
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+
+EVENT time: 99.616932,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 6
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+
+EVENT time: 99.707541,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+A: Rejecting ACK from B...  Waiting for new ACK 5
+
+EVENT time: 102.116153,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> lllllllllllllllllll
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+
+EVENT time: 108.704733,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+A: Checking ACK from B...
+
+EVENT time: 108.874783,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 6
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+          TOLAYER3: packet being corrupted
+
+EVENT time: 110.723197,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+A: Rejecting ACK from B...  Waiting for new ACK 6
+
+EVENT time: 112.803125,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> mmmmmmmmmmmmmmmmmmm
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+
+EVENT time: 114.476272,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 6
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+
+EVENT time: 115.571306,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 6
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 6
+
+EVENT time: 116.520280,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> nnnnnnnnnnnnnnnnnnn
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+
+EVENT time: 118.781030,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+A: Rejecting ACK from B...  Waiting for new ACK 6
+
+EVENT time: 120.057375,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 7
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 121.094485,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 6
+
+EVENT time: 128.704733,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+
+EVENT time: 129.092715,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 5
+A: Rejecting ACK from B...  Waiting for new ACK 6
+
+EVENT time: 129.616382,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ooooooooooooooooooo
+
+EVENT time: 130.020295,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> ?iiiiiiiiiiiiiiiiii
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being corrupted
+
+EVENT time: 130.294504,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ppppppppppppppppppp
+
+EVENT time: 132.239540,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 134.158330,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 6
+A: Checking ACK from B...
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+
+EVENT time: 136.813501,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 139.602985,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Checking ACK from B...
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+
+EVENT time: 146.534440,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 148.838313,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 149.752495,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> qqqqqqqqqqqqqqqqqqq
+
+EVENT time: 152.335032,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 155.988678,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 159.602985,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+
+EVENT time: 161.074862,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 161.968108,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 163.194952,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 163.759880,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> rrrrrrrrrrrrrrrrrrr
+
+EVENT time: 169.296335,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 169.543626,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 172.704428,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being corrupted
+
+EVENT time: 179.602985,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+
+EVENT time: 179.742424,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> sssssssssssssssssss
+
+EVENT time: 180.429090,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 999999
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 181.142399,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 184.223762,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ttttttttttttttttttt
+
+EVENT time: 185.130222,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 190.392010,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 6
+Packet ACK=> 999999
+Packet Msg=> ggggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 194.677297,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 195.227515,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> uuuuuuuuuuuuuuuuuuu
+
+EVENT time: 195.987945,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> ?iiiiiiiiiiiiiiiiii
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 198.590075,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 199.602985,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+
+EVENT time: 200.884426,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> vvvvvvvvvvvvvvvvvvv
+
+EVENT time: 202.373119,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 208.307169,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 210.173742,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 210.404859,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 211.236641,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being corrupted
+
+EVENT time: 212.843837,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 213.113193,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> wwwwwwwwwwwwwwwwwww
+
+EVENT time: 213.239998,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 216.117252,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 216.687826,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 219.602985,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being corrupted
+
+EVENT time: 222.198309,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 225.182501,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 225.314493,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 230.471297,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 232.038331,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 234.619037,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 237.011322,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 238.976409,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> yyyyyyyyyyyyyyyyyyy
+
+EVENT time: 239.602985,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+
+EVENT time: 242.662526,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> ?llllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 246.408704,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Checking ACK from B...
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being lost
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+          TOLAYER3: packet being lost
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being lost
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being corrupted
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 247.850642,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 248.886959,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 249.195898,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ?oooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 253.799860,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> zzzzzzzzzzzzzzzzzzz
+
+EVENT time: 255.556902,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 256.468184,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 257.676931,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 258.153813,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 261.053499,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> aaaaaaaaaaaaaaaaaaa
+
+EVENT time: 263.923948,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 266.369518,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 266.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+          TOLAYER3: packet being lost
+
+EVENT time: 272.493423,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 273.555101,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> bbbbbbbbbbbbbbbbbbb
+
+EVENT time: 274.250191,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 279.036195,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 280.242805,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 282.487869,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ccccccccccccccccccc
+
+EVENT time: 284.200415,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 285.729545,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ddddddddddddddddddd
+
+EVENT time: 286.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 286.452223,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> eeeeeeeeeeeeeeeeeee
+
+EVENT time: 287.584857,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 291.564440,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 295.676412,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 296.296396,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 299.465712,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 302.876064,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> fffffffffffffffffff
+
+EVENT time: 304.919706,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 306.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+          TOLAYER3: packet being corrupted
+
+EVENT time: 311.714621,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> ?mmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 316.611591,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 319.307382,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 319.884732,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 322.422559,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ggggggggggggggggggg
+
+EVENT time: 326.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+          TOLAYER3: packet being lost
+
+EVENT time: 327.661306,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 329.033265,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 332.181433,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 333.913480,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 336.670797,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 337.110508,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> hhhhhhhhhhhhhhhhhhh
+
+EVENT time: 339.312113,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> iiiiiiiiiiiiiiiiiii
+
+EVENT time: 342.044923,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 346.236763,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> jjjjjjjjjjjjjjjjjjj
+
+EVENT time: 346.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 347.519242,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 349.014801,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 350.655232,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> kkkkkkkkkkkkkkkkkkk
+
+EVENT time: 351.114841,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> lllllllllllllllllll
+
+EVENT time: 353.682424,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 354.933470,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ?pppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 357.522538,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 359.007538,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 360.371197,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> ?kkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 361.475265,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> mmmmmmmmmmmmmmmmmmm
+
+EVENT time: 361.511612,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 363.431745,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> ?mmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 366.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 370.284890,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 371.298196,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 375.055300,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 376.500137,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> nnnnnnnnnnnnnnnnnnn
+
+EVENT time: 378.256478,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 379.779992,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 381.441237,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 384.209723,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ooooooooooooooooooo
+
+EVENT time: 386.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 388.681875,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 391.438765,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 392.478408,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ppppppppppppppppppp
+
+EVENT time: 395.090182,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> qqqqqqqqqqqqqqqqqqq
+
+EVENT time: 396.155217,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 4
+Packet ACK=> 999999
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 396.334910,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 403.214087,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 405.235572,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 406.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+          TOLAYER3: packet being lost
+
+EVENT time: 408.216193,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> rrrrrrrrrrrrrrrrrrr
+
+EVENT time: 409.179235,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 410.865810,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> sssssssssssssssssss
+
+EVENT time: 414.951842,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 417.181799,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 999999
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 418.295083,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 421.380566,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 423.140416,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 426.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+          TOLAYER3: packet being corrupted
+
+EVENT time: 427.209204,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ?tttttttttttttttttt
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 429.294809,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 429.757988,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ttttttttttttttttttt
+
+EVENT time: 431.964721,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 437.869564,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 439.039521,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 440.957030,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 441.809137,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> uuuuuuuuuuuuuuuuuuu
+
+EVENT time: 446.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+          TOLAYER3: packet being lost
+
+EVENT time: 448.985961,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 450.611225,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 450.684713,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> ?rrrrrrrrrrrrrrrrrr
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 454.224281,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 454.903653,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 459.634999,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> vvvvvvvvvvvvvvvvvvv
+
+EVENT time: 461.602435,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 463.366771,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> ?uuuuuuuuuuuuuuuuuu
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 466.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+          TOLAYER3: packet being lost
+
+EVENT time: 468.156743,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 468.725242,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> wwwwwwwwwwwwwwwwwww
+
+EVENT time: 472.689718,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 473.705252,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 474.928190,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 476.754021,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 477.079592,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 479.288125,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 480.036775,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 485.864040,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 486.408704,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> sssssssssssssssssss
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ttttttttttttttttttt
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> uuuuuuuuuuuuuuuuuuu
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> vvvvvvvvvvvvvvvvvvv
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> wwwwwwwwwwwwwwwwwww
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 486.811731,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> rrrrrrrrrrrrrrrrrrr
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+
+EVENT time: 488.193793,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: Checking ACK from B...
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> yyyyyyyyyyyyyyyyyyy
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> zzzzzzzzzzzzzzzzzzz
+          TOLAYER3: packet being corrupted
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being lost
+
+EVENT time: 492.281869,  type: 1, fromlayer5  entity: 0
+Simulator terminated at time 492.281868953520
+ 
+==================================
+==   END SIMULATION STATISTICS  ==
+==================================
+ 
+----------------------------------
+|  Messages arrived to A:   50  |
+|  Packets sent from A:     191 |
+|  Packets retransmitted:   164 |
+|  Correct acks:            20  |
+|  Corrupted packets:       35  |
+----------------------------------
+\end{lstlisting}
+\subsubsection{Caso 3}
+Probabilità di corruzione o perdita di pacchetti 0.5
+\begin{lstlisting}[
+    basicstyle=\tiny
+]
+EVENT time: 9.181188,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> aaaaaaaaaaaaaaaaaaa
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being corrupted
+
+EVENT time: 11.710562,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> bbbbbbbbbbbbbbbbbbb
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+
+EVENT time: 14.562120,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> ?aaaaaaaaaaaaaaaaaa
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 17.071139,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 23.490646,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 29.176305,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ccccccccccccccccccc
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+          TOLAYER3: packet being corrupted
+
+EVENT time: 29.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+          TOLAYER3: packet being corrupted
+
+EVENT time: 31.216773,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ddddddddddddddddddd
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being lost
+
+EVENT time: 31.881375,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 34.024934,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ?cccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 42.254982,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 2
+Packet ACK=> 999999
+Packet Msg=> ccccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 46.134831,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> eeeeeeeeeeeeeeeeeee
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+
+EVENT time: 48.403607,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 48.481796,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 49.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+
+EVENT time: 52.539384,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 53.382427,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> ?bbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 55.994751,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> fffffffffffffffffff
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+
+EVENT time: 58.933073,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ggggggggggggggggggg
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being corrupted
+
+EVENT time: 59.699423,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ?cccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 65.239662,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 3
+Packet ACK=> 999999
+Packet Msg=> ddddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 69.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being corrupted
+
+EVENT time: 69.251381,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 72.929991,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 76.867275,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ?gggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 76.968902,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> hhhhhhhhhhhhhhhhhhh
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+          TOLAYER3: packet being corrupted
+
+EVENT time: 77.573992,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 78.770104,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> iiiiiiiiiiiiiiiiiii
+
+EVENT time: 82.595935,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> ?aaaaaaaaaaaaaaaaaa
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 84.932798,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 86.713126,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 88.353710,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> ?bbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 89.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+          TOLAYER3: packet being lost
+
+EVENT time: 91.162450,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> jjjjjjjjjjjjjjjjjjj
+
+EVENT time: 92.883175,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ?gggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+
+EVENT time: 93.445143,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 999999
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 94.540178,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 94.589068,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> kkkkkkkkkkkkkkkkkkk
+
+EVENT time: 102.116153,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> lllllllllllllllllll
+
+EVENT time: 102.389325,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> ?hhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 104.676687,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 105.012329,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 106.411695,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ?dddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 109.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+
+EVENT time: 112.803125,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> mmmmmmmmmmmmmmmmmmm
+
+EVENT time: 115.669546,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being corrupted
+
+EVENT time: 116.520280,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> nnnnnnnnnnnnnnnnnnn
+
+EVENT time: 120.243507,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 0
+
+EVENT time: 121.271035,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 15
+          TOLAYER3: packet being lost
+
+EVENT time: 125.757103,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 0
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+
+EVENT time: 129.181188,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> aaaaaaaaaaaaaaaaaaa
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2
+Packet ACK=> 0
+Packet Msg=> ccccccccccccccccccc
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+
+EVENT time: 129.616382,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ooooooooooooooooooo
+
+EVENT time: 130.294504,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ppppppppppppppppppp
+
+EVENT time: 134.567248,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 135.478042,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: Checking ACK from B...
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being corrupted
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+
+EVENT time: 144.530168,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ?dddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 149.752495,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> qqqqqqqqqqqqqqqqqqq
+
+EVENT time: 151.181707,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> ?eeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+
+EVENT time: 155.478042,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+
+EVENT time: 159.179937,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 160.178900,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 162.398144,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 163.759880,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> rrrrrrrrrrrrrrrrrrr
+
+EVENT time: 171.852382,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 1
+Packet ACK=> 0
+Packet Msg=> bbbbbbbbbbbbbbbbbbb
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being corrupted
+
+EVENT time: 175.478042,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+
+EVENT time: 177.297037,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 177.831812,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being corrupted
+
+EVENT time: 179.698386,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 179.742424,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> sssssssssssssssssss
+
+EVENT time: 179.850276,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> ?ffffffffffffffffff
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being corrupted
+
+EVENT time: 180.913175,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 999999
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 184.223762,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ttttttttttttttttttt
+
+EVENT time: 187.908109,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ?gggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 195.227515,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> uuuuuuuuuuuuuuuuuuu
+
+EVENT time: 195.478042,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+
+EVENT time: 195.483627,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 197.797082,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> ?iiiiiiiiiiiiiiiiii
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being corrupted
+
+EVENT time: 200.884426,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> vvvvvvvvvvvvvvvvvvv
+
+EVENT time: 200.957884,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 201.244911,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 206.023499,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+
+EVENT time: 213.113193,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> wwwwwwwwwwwwwwwwwww
+
+EVENT time: 214.461470,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 9
+Packet ACK=> 999999
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+
+EVENT time: 214.763329,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 215.478042,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+
+EVENT time: 216.883419,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 223.711081,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ?dddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being corrupted
+
+EVENT time: 227.996368,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 999999
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 228.899197,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 229.307016,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> ?ffffffffffffffffff
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 231.909146,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 232.038331,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 235.478042,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+
+EVENT time: 238.976409,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> yyyyyyyyyyyyyyyyyyy
+
+EVENT time: 241.626240,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> ?iiiiiiiiiiiiiiiiii
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 250.861568,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ?dddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 253.799860,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> zzzzzzzzzzzzzzzzzzz
+
+EVENT time: 254.358287,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> ?jjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being lost
+
+EVENT time: 255.478042,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> eeeeeeeeeeeeeeeeeee
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+A: Resending DATA to B...
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+
+EVENT time: 256.361644,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 2
+          TOLAYER3: packet being corrupted
+
+EVENT time: 261.053499,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> aaaaaaaaaaaaaaaaaaa
+
+EVENT time: 264.111026,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 999999
+Packet ACK=> 2
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 3
+
+EVENT time: 264.988311,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 3
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ddddddddddddddddddd
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 4
+          TOLAYER3: packet being lost
+
+EVENT time: 270.145116,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 5
+Packet SEQ_NUM=> 5
+Packet ACK=> 0
+Packet Msg=> fffffffffffffffffff
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 273.555101,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> bbbbbbbbbbbbbbbbbbb
+
+EVENT time: 274.102725,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Checking ACK from B...
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being corrupted
+
+EVENT time: 276.685141,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 282.336344,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> ?kkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 282.487869,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ccccccccccccccccccc
+
+EVENT time: 283.681600,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 3
+Packet ACK=> 0
+Packet Msg=> ?dddddddddddddddddd
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 285.729545,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ddddddddddddddddddd
+
+EVENT time: 286.452223,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> eeeeeeeeeeeeeeeeeee
+
+EVENT time: 289.782983,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 4
+Packet ACK=> 0
+Packet Msg=> ?eeeeeeeeeeeeeeeeee
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 294.102725,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being corrupted
+
+EVENT time: 297.507645,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> ?hhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 297.814722,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 302.876064,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> fffffffffffffffffff
+
+EVENT time: 304.779931,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 305.988678,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 6
+Packet ACK=> 0
+Packet Msg=> ggggggggggggggggggg
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+          TOLAYER3: packet being lost
+
+EVENT time: 314.102725,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+
+EVENT time: 314.681265,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 7
+Packet ACK=> 0
+Packet Msg=> hhhhhhhhhhhhhhhhhhh
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+
+EVENT time: 317.120243,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 7
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 320.805170,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 8
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being lost
+
+EVENT time: 322.422559,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ggggggggggggggggggg
+
+EVENT time: 328.169195,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being corrupted
+
+EVENT time: 331.442610,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 8
+
+EVENT time: 332.157018,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ?oooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+
+EVENT time: 334.102725,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+
+EVENT time: 337.110508,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> hhhhhhhhhhhhhhhhhhh
+
+EVENT time: 338.238075,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+A: Checking ACK from B...
+A: Sending new DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+
+EVENT time: 339.312113,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> iiiiiiiiiiiiiiiiiii
+
+EVENT time: 339.852840,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ?pppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being lost
+
+EVENT time: 343.964812,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 8
+Packet ACK=> 0
+Packet Msg=> iiiiiiiiiiiiiiiiiii
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being corrupted
+
+EVENT time: 346.236763,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> jjjjjjjjjjjjjjjjjjj
+
+EVENT time: 348.632435,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 350.655232,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> kkkkkkkkkkkkkkkkkkk
+
+EVENT time: 351.114841,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> lllllllllllllllllll
+
+EVENT time: 353.208106,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> ?kkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being lost
+
+EVENT time: 358.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being corrupted
+
+EVENT time: 360.003021,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ?oooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being lost
+
+EVENT time: 361.475265,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> mmmmmmmmmmmmmmmmmmm
+
+EVENT time: 364.899991,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 999999
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being lost
+
+EVENT time: 367.595782,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+
+EVENT time: 374.448927,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 375.949705,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 8
+          TOLAYER3: packet being lost
+
+EVENT time: 376.500137,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> nnnnnnnnnnnnnnnnnnn
+
+EVENT time: 378.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being lost
+
+EVENT time: 378.933897,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 9
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 10
+          TOLAYER3: packet being corrupted
+
+EVENT time: 384.209723,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ooooooooooooooooooo
+
+EVENT time: 385.186071,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 11
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 10
+          TOLAYER3: packet being lost
+
+EVENT time: 386.407239,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 10
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 392.478408,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ppppppppppppppppppp
+
+EVENT time: 393.317515,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 11
+Packet SEQ_NUM=> 13
+Packet ACK=> 999999
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 10
+          TOLAYER3: packet being lost
+
+EVENT time: 395.090182,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> qqqqqqqqqqqqqqqqqqq
+
+EVENT time: 398.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being lost
+
+EVENT time: 400.287393,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 11
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+B: Sending ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 401.538438,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> ?jjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 408.216193,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> rrrrrrrrrrrrrrrrrrr
+
+EVENT time: 410.842982,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> ?kkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 410.865810,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> sssssssssssssssssss
+
+EVENT time: 418.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being corrupted
+
+EVENT time: 420.240364,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 424.314432,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 425.678091,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ?oooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 427.908048,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 428.738639,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> ?qqqqqqqqqqqqqqqqqq
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 429.757988,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ttttttttttttttttttt
+
+EVENT time: 436.710227,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+
+EVENT time: 438.233741,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 438.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+
+EVENT time: 440.711997,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 11
+Packet ACK=> 999999
+Packet Msg=> lllllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 440.908994,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 441.809137,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> uuuuuuuuuuuuuuuuuuu
+
+EVENT time: 449.613880,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+
+EVENT time: 456.672750,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+
+EVENT time: 456.955931,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 458.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being corrupted
+
+EVENT time: 459.634999,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> vvvvvvvvvvvvvvvvvvv
+
+EVENT time: 462.637898,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+
+EVENT time: 465.667470,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 467.905942,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 468.410504,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ?pppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 468.725242,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> wwwwwwwwwwwwwwwwwww
+
+EVENT time: 470.561907,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 473.705252,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> xxxxxxxxxxxxxxxxxxx
+
+EVENT time: 475.080447,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> ?mmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 477.677358,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 478.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+
+EVENT time: 478.249763,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 483.447493,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 14
+Packet ACK=> 999999
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 491.328166,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> ?qqqqqqqqqqqqqqqqqq
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 492.281869,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> yyyyyyyyyyyyyyyyyyy
+
+EVENT time: 492.596026,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 497.156804,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> ?kkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 498.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2038004089
+Packet ACK=> 2038004089
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+          TOLAYER3: packet being lost
+
+EVENT time: 501.912320,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+
+EVENT time: 505.060488,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 508.987121,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 510.593585,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> zzzzzzzzzzzzzzzzzzz
+
+EVENT time: 518.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2038004089
+Packet ACK=> 2038004089
+Packet Msg=> zzzzzzzzzzzzzzzzzzz
+          TOLAYER3: packet being corrupted
+
+EVENT time: 518.933561,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 523.719565,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 525.418317,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> ?jjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 528.957884,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> ?mmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 530.508744,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> aaaaaaaaaaaaaaaaaaa
+
+EVENT time: 532.596179,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 535.960234,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 538.100375,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 999999
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+
+EVENT time: 538.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2038004089
+Packet ACK=> 2038004089
+Packet Msg=> zzzzzzzzzzzzzzzzzzz
+          TOLAYER3: packet being lost
+
+EVENT time: 539.733482,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 546.895962,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> bbbbbbbbbbbbbbbbbbb
+
+EVENT time: 547.423322,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 999999
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 549.631855,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 557.155461,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> ?kkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 557.962584,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ccccccccccccccccccc
+
+EVENT time: 558.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2038004089
+Packet ACK=> 2038004089
+Packet Msg=> zzzzzzzzzzzzzzzzzzz
+          TOLAYER3: packet being lost
+
+EVENT time: 566.619587,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 567.680898,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ddddddddddddddddddd
+
+EVENT time: 572.523759,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 573.798212,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> ?mmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 575.875118,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> eeeeeeeeeeeeeeeeeee
+
+EVENT time: 578.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2038004089
+Packet ACK=> 2038004089
+Packet Msg=> zzzzzzzzzzzzzzzzzzz
+          TOLAYER3: packet being lost
+
+EVENT time: 578.465560,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> ?nnnnnnnnnnnnnnnnnn
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 582.274239,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> fffffffffffffffffff
+
+EVENT time: 583.731956,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 14
+Packet ACK=> 999999
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 587.005097,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 0
+Packet ACK=> 0
+Packet Msg=> qqqqqqqqqqqqqqqqqqq
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being corrupted
+
+EVENT time: 588.922758,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 589.755547,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> ggggggggggggggggggg
+
+EVENT time: 590.575274,  type: 1, fromlayer5  entity: 0
+A: Receiving MSG from layer 5...
+####[DEBUG] DATA=> hhhhhhhhhhhhhhhhhhh
+
+EVENT time: 594.940977,  type: 2, fromlayer3  entity: 0
+A: Receiving ACK from B...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+A: ACK is corrupted.
+A: Rejecting ACK from B...  Waiting for new ACK 9
+
+EVENT time: 596.481521,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> ?kkkkkkkkkkkkkkkkkk
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 598.238075,  type: 0, timerinterrupt   entity: 0
+A: Resending DATA to B...
+Packet SEQ_NUM=> 9
+Packet ACK=> 0
+Packet Msg=> jjjjjjjjjjjjjjjjjjj
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 10
+Packet ACK=> 0
+Packet Msg=> kkkkkkkkkkkkkkkkkkk
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 11
+Packet ACK=> 0
+Packet Msg=> lllllllllllllllllll
+          TOLAYER3: packet being corrupted
+A: Resending DATA to B...
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 13
+Packet ACK=> 0
+Packet Msg=> nnnnnnnnnnnnnnnnnnn
+A: Resending DATA to B...
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 15
+Packet ACK=> 0
+Packet Msg=> ppppppppppppppppppp
+          TOLAYER3: packet being lost
+A: Resending DATA to B...
+Packet SEQ_NUM=> 2038004089
+Packet ACK=> 2038004089
+Packet Msg=> zzzzzzzzzzzzzzzzzzz
+          TOLAYER3: packet being lost
+
+EVENT time: 604.876370,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 12
+Packet ACK=> 0
+Packet Msg=> mmmmmmmmmmmmmmmmmmm
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+          TOLAYER3: packet being lost
+
+EVENT time: 606.354289,  type: 2, fromlayer3  entity: 1
+B: Receiving DATA from A...
+Expected SEQ_NUM=> 4
+Packet SEQ_NUM=> 14
+Packet ACK=> 0
+Packet Msg=> ooooooooooooooooooo
+B: Resending previous ACK to A...
+Packet SEQ_NUM=> 0
+Packet ACK=> 3
+
+EVENT time: 607.538072,  type: 1, fromlayer5  entity: 0
+Simulator terminated at time 607.538071840571
+ 
+==================================
+==   END SIMULATION STATISTICS  ==
+==================================
+ 
+----------------------------------
+|  Messages arrived to A:  60    |
+|  Packets sent from A:    232    |
+|  Packets retransmitted:   215     |
+|  Correct acks:            19     |
+|  Corrupted packets:       78     |
+----------------------------------
+
+\end{lstlisting}
+\end{document}
